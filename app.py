@@ -41,7 +41,7 @@ def leer_correos_hoy():
         mail.select("INBOX")
 
         today = datetime.now().strftime("%d-%b-%Y")
-        status, messages = mail.search(None, f'(UNSEEN SINCE {today})')
+        status, messages = mail.search(None, 'ALL')
 
         if status != "OK":
             return jsonify({"success": False, "error": "No se pudo buscar correos"}), 500
