@@ -10,26 +10,26 @@ from datetime import datetime
 import logging
 import os
 
-# Configuración de logs para depuración en Render
+# Configuración de logs para ver errores en tiempo real en Render
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuración de Servidores
+# Configuración de Servidores de Google
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587  # Puerto para TLS
+SMTP_PORT = 465  # Puerto SSL directo (más estable en Render que el 587)
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
         "status": "ok",
-        "message": "API de Soporte TI (Lectura, Borradores y Envío) funcionando",
+        "message": "API de Soporte TI (Lectura, Borradores y Envío) Funcionando",
     })
 
-# --- ENDPOINT PARA LEER CORREOS ---
+# --- 1. ENDPOINT PARA LEER CORREOS ---
 @app.route("/leer-correos-hoy", methods=["POST"])
 def leer_correos_hoy():
     data = request.get_json()
@@ -83,7 +83,7 @@ def leer_correos_hoy():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-# --- ENDPOINT PARA CREAR BORRADOR ---
+# --- 2. ENDPOINT PARA CREAR BORRADOR ---
 @app.route("/crear-borrador", methods=["POST"])
 def crear_borrador():
     data = request.get_json()
@@ -101,7 +101,7 @@ def crear_borrador():
         msg['From'] = email_user
         msg['To'] = destinatario
         msg['Subject'] = asunto
-        msg.attach(MIMEText(mensaje_cuerpo, 'plain'))
+        msg.attach(MIMEText(mensaje_cuerpo, 'plain', 'utf-8')) # Soporte para tildes
 
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         mail.login(email_user, password)
@@ -115,40 +115,41 @@ def crear_borrador():
         logging.error(f"Error en borrador: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-##3 este es el puerto para nosotros enviar correos, no es para la otro parte
+# --- 3. ENDPOINT PARA ENVIAR CORREO (OPTIMIZADO) ---
 @app.route("/enviar-correo", methods=["POST"])
 def enviar_correo():
     data = request.get_json()
     email_user = data.get("email")
-    password = data.get("password")  
+    password = data.get("password") # Tu clave de 16 caracteres
     destinatario = data.get("destinatario")
     asunto = data.get("asunto", "Respuesta de Soporte TI")
     mensaje_cuerpo = data.get("cuerpo")
 
     if not all([email_user, password, destinatario, mensaje_cuerpo]):
-        return jsonify({"success": False, "error": "Faltan datos para enviar el correo"}), 400
+        return jsonify({"success": False, "error": "Faltan datos obligatorios"}), 400
 
     try:
-        # 1. Crear el mensaje
+        # 1. Construir mensaje con codificación UTF-8 para evitar errores con tildes
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = destinatario
         msg['Subject'] = asunto
-        msg.attach(MIMEText(mensaje_cuerpo, 'plain'))
+        msg.attach(MIMEText(mensaje_cuerpo, 'plain', 'utf-8'))
 
-        # 2. Conectar al servidor SMTP y enviar
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-        server.starttls()  # Asegurar la conexión
+        # 2. Conectar vía SMTP SSL (Puerto 465 es el más confiable en servidores como Render)
+        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT)
         server.login(email_user, password)
         server.send_message(msg)
         server.quit()
 
-        logging.info(f"Correo enviado exitosamente a {destinatario}")
+        logging.info(f"Envío exitoso: De {email_user} para {destinatario}")
         return jsonify({"success": True, "message": "Correo enviado correctamente"})
 
+    except smtplib.SMTPAuthenticationError:
+        return jsonify({"success": False, "error": "Error de autenticación: Revisa tu contraseña de aplicación"}), 401
     except Exception as e:
-        logging.error(f"Error al enviar correo: {str(e)}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logging.error(f"Error crítico en envío: {str(e)}")
+        return jsonify({"success": False, "error": f"Fallo técnico: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
