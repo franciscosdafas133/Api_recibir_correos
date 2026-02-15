@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import imaplib
+import smtplib
 import email
 from email.header import decode_header
 from email.mime.text import MIMEText
@@ -15,14 +16,17 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 CORS(app)
 
+# Configuración de Servidores
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587  # Puerto para TLS
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
         "status": "ok",
-        "message": "API de Soporte TI (Lectura + Borradores) funcionando",
+        "message": "API de Soporte TI (Lectura, Borradores y Envío) funcionando",
     })
 
 # --- ENDPOINT PARA LEER CORREOS ---
@@ -41,7 +45,6 @@ def leer_correos_hoy():
         mail.login(email_user, password)
         mail.select("INBOX")
 
-        # Filtro 'ALL' para asegurar resultados en tus pruebas de Data Science
         status, messages = mail.search(None, 'ALL')
         if status != "OK":
             return jsonify({"success": False, "error": "Error en búsqueda"}), 500
@@ -94,27 +97,57 @@ def crear_borrador():
         return jsonify({"success": False, "error": "Datos incompletos"}), 400
 
     try:
-        # 1. Construir el mensaje MIME
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = destinatario
         msg['Subject'] = asunto
         msg.attach(MIMEText(mensaje_cuerpo, 'plain'))
 
-        # 2. Conectar vía IMAP para guardar en la carpeta de borradores
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         mail.login(email_user, password)
-        
-        # En Gmail la carpeta estándar es "[Gmail]/Drafts"
-        # Usamos append para subir el mensaje directamente a esa carpeta
         mail.append("[Gmail]/Drafts", '', imaplib.Time2Internaldate(datetime.now().timestamp()), msg.as_bytes())
-        
         mail.logout()
+        
         logging.info(f"Borrador creado para {destinatario}")
         return jsonify({"success": True, "message": "Borrador guardado exitosamente"})
 
     except Exception as e:
         logging.error(f"Error en borrador: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+##3 este es el puerto para nosotros enviar correos, no es para la otro parte
+@app.route("/enviar-correo", methods=["POST"])
+def enviar_correo():
+    data = request.get_json()
+    email_user = data.get("email")
+    password = data.get("password")  
+    destinatario = data.get("destinatario")
+    asunto = data.get("asunto", "Respuesta de Soporte TI")
+    mensaje_cuerpo = data.get("cuerpo")
+
+    if not all([email_user, password, destinatario, mensaje_cuerpo]):
+        return jsonify({"success": False, "error": "Faltan datos para enviar el correo"}), 400
+
+    try:
+        # 1. Crear el mensaje
+        msg = MIMEMultipart()
+        msg['From'] = email_user
+        msg['To'] = destinatario
+        msg['Subject'] = asunto
+        msg.attach(MIMEText(mensaje_cuerpo, 'plain'))
+
+        # 2. Conectar al servidor SMTP y enviar
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+        server.starttls()  # Asegurar la conexión
+        server.login(email_user, password)
+        server.send_message(msg)
+        server.quit()
+
+        logging.info(f"Correo enviado exitosamente a {destinatario}")
+        return jsonify({"success": True, "message": "Correo enviado correctamente"})
+
+    except Exception as e:
+        logging.error(f"Error al enviar correo: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
