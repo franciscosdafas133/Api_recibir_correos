@@ -115,42 +115,38 @@ def crear_borrador():
         logging.error(f"Error en borrador: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# --- 3. ENDPOINT PARA ENVIAR CORREO (OPTIMIZADO) ---
 @app.route("/enviar-correo", methods=["POST"])
 def enviar_correo():
     data = request.get_json()
     email_user = data.get("email")
-    password = data.get("password") # Tu clave de 16 caracteres
+    password = data.get("password")  # Tu clave de aplicación de 16 caracteres
     destinatario = data.get("destinatario")
     asunto = data.get("asunto", "Respuesta de Soporte TI")
     mensaje_cuerpo = data.get("cuerpo")
 
+    # Validación de datos para evitar que el script falle por falta de info
     if not all([email_user, password, destinatario, mensaje_cuerpo]):
-        return jsonify({"success": False, "error": "Faltan datos obligatorios"}), 400
+        return jsonify({"success": False, "error": "Faltan datos obligatorios en la petición"}), 400
 
     try:
-        # 1. Construir mensaje con codificación UTF-8 para evitar errores con tildes
+        # 1. Configuración del mensaje con soporte para tildes
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = destinatario
         msg['Subject'] = asunto
         msg.attach(MIMEText(mensaje_cuerpo, 'plain', 'utf-8'))
 
-        # 2. Conectar vía SMTP SSL (Puerto 465 es el más confiable en servidores como Render)
-        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT)
-        server.login(email_user, password)
-        server.send_message(msg)
-        server.quit()
-
-        logging.info(f"Envío exitoso: De {email_user} para {destinatario}")
+        # 2. Conexión usando SSL directo (Puerto 465) con un timeout de 15 segundos
+        # Esto evita que el proceso se quede cargando "eternamente"
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+            server.login(email_user, password)
+            server.send_message(msg)
+        
+        logging.info(f"Éxito: Correo enviado a {destinatario}")
         return jsonify({"success": True, "message": "Correo enviado correctamente"})
 
     except smtplib.SMTPAuthenticationError:
-        return jsonify({"success": False, "error": "Error de autenticación: Revisa tu contraseña de aplicación"}), 401
+        return jsonify({"success": False, "error": "Contraseña de aplicación incorrecta"}), 401
     except Exception as e:
-        logging.error(f"Error crítico en envío: {str(e)}")
-        return jsonify({"success": False, "error": f"Fallo técnico: {str(e)}"}), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+        logging.error(f"Error crítico en SMTP: {str(e)}")
+        return jsonify({"success": False, "error": f"Fallo de conexión: {str(e)}"}), 500
