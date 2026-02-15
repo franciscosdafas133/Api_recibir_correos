@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import imaplib
-import smtplib
 import email
 from email.header import decode_header
 from email.mime.text import MIMEText
@@ -10,30 +9,26 @@ from datetime import datetime
 import logging
 import os
 
-# Configuración de logs para ver errores en la consola de Render
+# Configuración de logs para depuración en Render
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuración de servidores de Google
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
         "status": "ok",
-        "message": "API de Soporte TI (IMAP + SMTP) funcionando",
+        "message": "API de Soporte TI (Lectura + Borradores) funcionando",
     })
 
 # --- ENDPOINT PARA LEER CORREOS ---
 @app.route("/leer-correos-hoy", methods=["POST"])
 def leer_correos_hoy():
     data = request.get_json()
-
     email_user = data.get("email")
     password = data.get("password")
     cantidad = data.get("cantidad", 5)
@@ -46,11 +41,10 @@ def leer_correos_hoy():
         mail.login(email_user, password)
         mail.select("INBOX")
 
-        # Filtro 'ALL' para que siempre encuentre los últimos correos en tus pruebas
+        # Filtro 'ALL' para asegurar resultados en tus pruebas de Data Science
         status, messages = mail.search(None, 'ALL')
-
         if status != "OK":
-            return jsonify({"success": False, "error": "No se pudo buscar correos"}), 500
+            return jsonify({"success": False, "error": "Error en búsqueda"}), 500
 
         email_ids = messages[0].split()[-cantidad:]
         correos = []
@@ -77,65 +71,51 @@ def leer_correos_hoy():
                 "from": msg.get("From"),
                 "subject": subject,
                 "date": msg.get("Date"),
-                "body": body[:1000] # Limitamos a 1000 caracteres para ahorrar tokens
+                "body": body[:1000]
             })
 
         mail.logout()
+        return jsonify({"success": True, "cantidad": len(correos), "correos": correos})
 
-        return jsonify({
-            "success": True,
-            "cantidad": len(correos),
-            "correos": correos
-        })
-
-    except imaplib.IMAP4.error:
-        return jsonify({"success": False, "error": "Autenticación IMAP fallida"}), 401
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-# --- NUEVO ENDPOINT PARA ENVIAR RESPUESTAS ---
-@app.route("/enviar-respuesta", methods=["POST"])
-def enviar_respuesta():
+# --- ENDPOINT PARA CREAR BORRADOR ---
+@app.route("/crear-borrador", methods=["POST"])
+def crear_borrador():
     data = request.get_json()
-
     email_user = data.get("email")
     password = data.get("password")
     destinatario = data.get("destinatario")
-    asunto = data.get("asunto", "Re: Soporte Técnico")
+    asunto = data.get("asunto", "Borrador de Soporte")
     mensaje_cuerpo = data.get("cuerpo")
 
     if not all([email_user, password, destinatario, mensaje_cuerpo]):
-        return jsonify({"success": False, "error": "Faltan datos obligatorios"}), 400
+        return jsonify({"success": False, "error": "Datos incompletos"}), 400
 
     try:
-        # Configuración del correo de salida
+        # 1. Construir el mensaje MIME
         msg = MIMEMultipart()
         msg['From'] = email_user
         msg['To'] = destinatario
         msg['Subject'] = asunto
         msg.attach(MIMEText(mensaje_cuerpo, 'plain'))
 
-        # Conexión al servidor SMTP
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-        server.starttls() 
-        server.login(email_user, password)
+        # 2. Conectar vía IMAP para guardar en la carpeta de borradores
+        mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        mail.login(email_user, password)
         
-        # Envío del mensaje
-        server.send_message(msg)
-        server.quit()
+        # En Gmail la carpeta estándar es "[Gmail]/Drafts"
+        # Usamos append para subir el mensaje directamente a esa carpeta
+        mail.append("[Gmail]/Drafts", '', imaplib.Time2Internaldate(datetime.now().timestamp()), msg.as_bytes())
         
-        logging.info(f"Correo enviado con éxito a {destinatario}")
-        return jsonify({
-            "success": True, 
-            "message": f"Respuesta enviada con éxito a {destinatario}"
-        })
+        mail.logout()
+        logging.info(f"Borrador creado para {destinatario}")
+        return jsonify({"success": True, "message": "Borrador guardado exitosamente"})
 
     except Exception as e:
-        logging.error(f"Error en SMTP: {str(e)}")
-        return jsonify({
-            "success": False, 
-            "error": f"Error al enviar: {str(e)}"
-        }), 500
+        logging.error(f"Error en borrador: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
